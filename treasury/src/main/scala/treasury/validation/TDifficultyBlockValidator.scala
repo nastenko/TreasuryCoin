@@ -1,0 +1,45 @@
+package treasury.validation
+
+import examples.hybrid.blocks.{HybridBlock, PosBlock, PowBlock}
+import examples.hybrid.history.HistoryStorage
+import examples.hybrid.mining.{HybridMiningSettings, PosForger}
+import scorex.core.block.BlockValidator
+import scorex.crypto.encode.Base58
+import treasury.block.TPosBlock
+import treasury.history.THistoryStorage
+
+import scala.util.Try
+
+class TDifficultyBlockValidator(settings: HybridMiningSettings, storage: THistoryStorage)
+  extends BlockValidator[HybridBlock] {
+
+  def validate(block: HybridBlock): Try[Unit] = block match {
+    case b: PowBlock => checkPoWConsensusRules(b)
+    case b: TPosBlock => checkPoSConsensusRules(b, settings)
+  }
+
+  //PoW consensus rules checks, work/references
+  //throws exception if anything wrong
+  private def checkPoWConsensusRules(powBlock: PowBlock): Try[Unit] = Try {
+    val powDifficulty = storage.getPoWDifficulty(Some(powBlock.prevPosId))
+    //check work
+    require(powBlock.correctWork(powDifficulty, settings),
+      s"Work done is incorrect for block ${Base58.encode(powBlock.id)} and difficulty $powDifficulty")
+
+    //some brothers work
+    require(powBlock.brothers.forall(_.correctWork(powDifficulty, settings)))
+
+  }
+
+  //PoS consensus rules checks, throws exception if anything wrong
+  private def checkPoSConsensusRules(posBlock: TPosBlock, miningSettings: HybridMiningSettings): Try[Unit] = Try {
+    if (!storage.isGenesis(posBlock)) {
+      val parentPoW: PowBlock = storage.modifierById(posBlock.parentId).get.asInstanceOf[PowBlock]
+      val hit = PosForger.hit(parentPoW)(posBlock.generatorBox)
+      val posDifficulty = storage.getPoSDifficulty(parentPoW.prevPosId)
+      val target = (miningSettings.MaxTarget / posDifficulty) * posBlock.generatorBox.value
+      require(hit < target, s"$hit < $target failed, $posDifficulty, ")
+    }
+  }
+
+}
